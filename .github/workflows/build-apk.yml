@@ -25,24 +25,42 @@ jobs:
           npm install
           npm install @capacitor/core @capacitor/cli @capacitor/android
 
-      - name: Build Web Application & Assemble Dist
+      - name: Build Web Application & Bundle All Assets
+        env:
+          DATABASE_URL: "postgresql://postgres:postgres@localhost:5432/meridian"
+          NODE_ENV: "production"
         run: |
-          # 1. Compile web assets
-          npx vite build || npm run build || true
+          echo "=== 1. Compiling Meridian Vite frontend ==="
+          if [ -f "scripts/with-app-env.mjs" ]; then
+            node scripts/with-app-env.mjs vite build || npx vite build || true
+          else
+            npx vite build || true
+          fi
 
-          # 2. Gather static assets into dist
+          echo "=== 2. Assembling complete dist directory ==="
           mkdir -p dist
-          if [ -d ".vercel/output/static" ]; then
-            cp -r .vercel/output/static/* dist/
-          fi
-          if [ -d ".output/public" ]; then
-            cp -r .output/public/* dist/
-          fi
-          if [ -d "dist/client" ]; then
-            cp -r dist/client/* dist/
+
+          if [ -d "public" ]; then
+            echo "Including public assets..."
+            cp -r public/* dist/ 2>/dev/null || true
           fi
 
-          # 3. Generate guaranteed index.html linked to compiled app assets
+          if [ -d ".vercel/output/static" ]; then
+            echo "Including .vercel/output/static..."
+            cp -r .vercel/output/static/* dist/ 2>/dev/null || true
+          fi
+
+          if [ -d ".output/public" ]; then
+            echo "Including .output/public..."
+            cp -r .output/public/* dist/ 2>/dev/null || true
+          fi
+
+          if [ -d "dist/client" ]; then
+            echo "Including dist/client..."
+            cp -r dist/client/* dist/ 2>/dev/null || true
+          fi
+
+          echo "=== 3. Linking assets to index.html ==="
           node -e '
             const fs = require("fs");
             const path = require("path");
@@ -50,36 +68,20 @@ jobs:
             const distDir = path.join(process.cwd(), "dist");
             const assetsDir = path.join(distDir, "assets");
 
-            if (!fs.existsSync(distDir)) {
-              fs.mkdirSync(distDir, { recursive: true });
-            }
-
-            let cssFiles = [];
-            let jsFiles = [];
-
-            if (fs.existsSync(assetsDir)) {
-              const files = fs.readdirSync(assetsDir);
-              cssFiles = files.filter(f => f.endsWith(".css"));
-              jsFiles = files.filter(f => f.endsWith(".js"));
-            }
-
-            console.log("CSS assets found:", cssFiles);
-            console.log("JS assets found:", jsFiles);
-
             let htmlPath = path.join(distDir, "index.html");
             let htmlContent = "";
 
-            if (fs.existsSync(htmlPath)) {
-              htmlContent = fs.readFileSync(htmlPath, "utf8");
-            }
+            const possibleHtmlPaths = [
+              path.join(distDir, "index.html"),
+              path.join(process.cwd(), "index.html"),
+              path.join(process.cwd(), "public", "index.html"),
+              path.join(process.cwd(), "src", "index.html")
+            ];
 
-            if (!htmlContent.trim()) {
-              const candidates = ["index.html", "public/index.html", "src/index.html"];
-              for (const cand of candidates) {
-                if (fs.existsSync(cand)) {
-                  htmlContent = fs.readFileSync(cand, "utf8");
-                  break;
-                }
+            for (const p of possibleHtmlPaths) {
+              if (fs.existsSync(p)) {
+                htmlContent = fs.readFileSync(p, "utf8");
+                break;
               }
             }
 
@@ -98,26 +100,34 @@ jobs:
             </html>`;
             }
 
-            cssFiles.forEach(css => {
-              if (!htmlContent.includes(css)) {
-                htmlContent = htmlContent.replace("</head>", `  <link rel="stylesheet" href="./assets/${css}">\n</head>`);
-              }
-            });
+            if (fs.existsSync(assetsDir)) {
+              const files = fs.readdirSync(assetsDir);
+              const cssFiles = files.filter(f => f.endsWith(".css"));
+              const jsFiles = files.filter(f => f.endsWith(".js"));
 
-            jsFiles.forEach(js => {
-              if (!htmlContent.includes(js)) {
-                htmlContent = htmlContent.replace("</body>", `  <script type="module" src="./assets/${js}"></script>\n</body>`);
-              }
-            });
+              cssFiles.forEach(css => {
+                if (!htmlContent.includes(css)) {
+                  htmlContent = htmlContent.replace("</head>", `  <link rel="stylesheet" href="./assets/${css}">\n</head>`);
+                }
+              });
+
+              jsFiles.forEach(js => {
+                if (!htmlContent.includes(js)) {
+                  htmlContent = htmlContent.replace("</body>", `  <script type="module" src="./assets/${js}"></script>\n</body>`);
+                }
+              });
+            }
 
             htmlContent = htmlContent.replace(/href="\/assets\//g, "href=\"./assets/");
             htmlContent = htmlContent.replace(/src="\/assets\//g, "src=\"./assets/");
+            htmlContent = htmlContent.replace(/href="\/favicon/g, "href=\"./favicon");
 
             fs.writeFileSync(htmlPath, htmlContent, "utf8");
-            console.log("Successfully prepared dist/index.html");
           '
 
-          ls -la dist/
+          echo "=== 4. Final dist bundle verification ==="
+          du -sh dist/
+          find dist -maxdepth 3
 
       - name: Sync Capacitor
         run: |
@@ -125,7 +135,11 @@ jobs:
           {
             "appId": "com.meridian.app",
             "appName": "Meridian",
-            "webDir": "dist"
+            "webDir": "dist",
+            "server": {
+              "androidScheme": "https",
+              "cleartext": true
+            }
           }
           CAP_EOF
 
