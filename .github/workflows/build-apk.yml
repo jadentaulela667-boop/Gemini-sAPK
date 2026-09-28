@@ -24,31 +24,18 @@ jobs:
 
       - run: npm install @capacitor/core @capacitor/cli @capacitor/android
 
-      - name: Build Web Assets
+      - name: Build Web Application
         run: |
-          npm run build || npx vite build || true
-          mkdir -p dist
-          if [ -d ".vercel/output/static" ]; then
-            cp -r .vercel/output/static/* dist/ || true
-          fi
-          if [ -d ".output/public" ]; then
-            cp -r .output/public/* dist/ || true
-          fi
-          if [ -d "dist/client" ]; then
-            cp -r dist/client/* dist/ || true
-          fi
-          INDEX_FILE=$(find . -maxdepth 4 -name "index.html" -not -path "*/node_modules/*" -not -path "*/.git/*" -not -path "./dist/*" | head -n 1)
-          if [ -n "$INDEX_FILE" ]; then
-            SRC_DIR=$(dirname "$INDEX_FILE")
-            if [ "$SRC_DIR" != "./dist" ] && [ "$SRC_DIR" != "dist" ]; then
-              cp -r "$SRC_DIR"/* dist/ || true
+          npm run build
+          if [ ! -d "dist" ]; then
+            if [ -d "build" ]; then
+              cp -r build dist
+            elif [ -d "out" ]; then
+              cp -r out dist
             fi
           fi
-          if [ ! -f "dist/index.html" ]; then
-            echo '<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Meridian</title></head><body><div id="root"></div></body></html>' > dist/index.html
-          fi
 
-      - name: Capacitor Sync
+      - name: Sync Capacitor
         run: |
           npx cap add android || true
           npx cap sync android
