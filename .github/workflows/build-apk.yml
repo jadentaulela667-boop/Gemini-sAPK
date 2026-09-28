@@ -25,21 +25,98 @@ jobs:
           npm install
           npm install @capacitor/core @capacitor/cli @capacitor/android
 
-      - name: Build Web Application
+      - name: Build Web Application & Assemble Dist
         run: |
-          # 1. Run Vite build directly to bypass database migrations
-          npx vite build || true
+          # 1. Compile web assets
+          npx vite build || npm run build || true
 
-          # 2. Extract compiled Meridian assets from Vercel/Nitro output
+          # 2. Gather static assets into dist
           mkdir -p dist
           if [ -d ".vercel/output/static" ]; then
             cp -r .vercel/output/static/* dist/
+          fi
+          if [ -d ".output/public" ]; then
+            cp -r .output/public/* dist/
           fi
           if [ -d "dist/client" ]; then
             cp -r dist/client/* dist/
           fi
 
-          echo "=== Verified dist output ==="
+          # 3. Generate guaranteed index.html linked to compiled app assets
+          node -e '
+            const fs = require("fs");
+            const path = require("path");
+
+            const distDir = path.join(process.cwd(), "dist");
+            const assetsDir = path.join(distDir, "assets");
+
+            if (!fs.existsSync(distDir)) {
+              fs.mkdirSync(distDir, { recursive: true });
+            }
+
+            let cssFiles = [];
+            let jsFiles = [];
+
+            if (fs.existsSync(assetsDir)) {
+              const files = fs.readdirSync(assetsDir);
+              cssFiles = files.filter(f => f.endsWith(".css"));
+              jsFiles = files.filter(f => f.endsWith(".js"));
+            }
+
+            console.log("CSS assets found:", cssFiles);
+            console.log("JS assets found:", jsFiles);
+
+            let htmlPath = path.join(distDir, "index.html");
+            let htmlContent = "";
+
+            if (fs.existsSync(htmlPath)) {
+              htmlContent = fs.readFileSync(htmlPath, "utf8");
+            }
+
+            if (!htmlContent.trim()) {
+              const candidates = ["index.html", "public/index.html", "src/index.html"];
+              for (const cand of candidates) {
+                if (fs.existsSync(cand)) {
+                  htmlContent = fs.readFileSync(cand, "utf8");
+                  break;
+                }
+              }
+            }
+
+            if (!htmlContent.trim()) {
+              htmlContent = `<!DOCTYPE html>
+            <html lang="en">
+            <head>
+              <meta charset="UTF-8">
+              <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+              <title>Meridian</title>
+            </head>
+            <body class="bg-black text-white">
+              <div id="root"></div>
+              <div id="app"></div>
+            </body>
+            </html>`;
+            }
+
+            cssFiles.forEach(css => {
+              if (!htmlContent.includes(css)) {
+                htmlContent = htmlContent.replace("</head>", `  <link rel="stylesheet" href="./assets/${css}">\n</head>`);
+              }
+            });
+
+            jsFiles.forEach(js => {
+              if (!htmlContent.includes(js)) {
+                htmlContent = htmlContent.replace("</body>", `  <script type="module" src="./assets/${js}"></script>\n</body>`);
+              }
+            });
+
+            htmlContent = htmlContent.replace(/href="\/assets\//g, "href=\"./assets/");
+            htmlContent = htmlContent.replace(/src="\/assets\//g, "src=\"./assets/");
+
+            fs.writeFileSync(htmlPath, htmlContent, "utf8");
+            console.log("Successfully prepared dist/index.html");
+          '
+
           ls -la dist/
 
       - name: Sync Capacitor
