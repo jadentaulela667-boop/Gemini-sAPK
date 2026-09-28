@@ -20,27 +20,91 @@ jobs:
         with:
           node-version: '20'
 
-      - run: npm install
-
-      - run: npm install @capacitor/core @capacitor/cli @capacitor/android
-
-      - name: Build Web Application
+      - name: Install Dependencies
         run: |
+          npm install
+          npm install @capacitor/core @capacitor/cli @capacitor/android
+
+      - name: Build Web Application & Prepare Dist
+        run: |
+          # 1. Run standard build
           npm run build
-          if [ ! -d "dist" ]; then
-            if [ -d "build" ]; then
-              cp -r build dist
-            elif [ -d "out" ]; then
-              cp -r out dist
+
+          # 2. Locate built index.html
+          echo "=== Locating built web application ==="
+          FOUND_DIR=""
+
+          if [ -f "dist/index.html" ]; then
+            echo "Found index.html in dist/"
+            FOUND_DIR="dist"
+          elif [ -f "build/index.html" ]; then
+            echo "Found index.html in build/"
+            FOUND_DIR="build"
+          elif [ -f "out/index.html" ]; then
+            echo "Found index.html in out/"
+            FOUND_DIR="out"
+          elif [ -f "www/index.html" ]; then
+            echo "Found index.html in www/"
+            FOUND_DIR="www"
+          else
+            SEARCH_RESULT=$(find . -name "index.html" -not -path "*/node_modules/*" -not -path "*/.git/*" -not -path "*/android/*" | head -n 1)
+            if [ -n "$SEARCH_RESULT" ]; then
+              FOUND_DIR=$(dirname "$SEARCH_RESULT")
+              echo "Found index.html in $FOUND_DIR"
             fi
           fi
 
-      - name: Sync Capacitor
+          if [ -z "$FOUND_DIR" ]; then
+            echo "ERROR: Could not find built index.html!"
+            find . -maxdepth 3 -not -path '*/.*' -not -path '*/node_modules*'
+            exit 1
+          fi
+
+          # 3. Copy web bundle to dist if output was elsewhere
+          if [ "$FOUND_DIR" != "dist" ]; then
+            mkdir -p dist
+            cp -r "$FOUND_DIR"/* dist/
+          fi
+
+          # 4. Verify index.html exists in dist
+          if [ ! -f "dist/index.html" ]; then
+            echo "ERROR: dist/index.html is missing after copy!"
+            exit 1
+          fi
+
+          echo "=== Web bundle prepared successfully ==="
+          ls -la dist/
+
+      - name: Configure and Sync Capacitor
         run: |
+          if [ -f "capacitor.config.json" ]; then
+            node -e '
+              const fs = require("fs");
+              const config = JSON.parse(fs.readFileSync("capacitor.config.json", "utf8"));
+              config.webDir = "dist";
+              fs.writeFileSync("capacitor.config.json", JSON.stringify(config, null, 2));
+            '
+          elif [ -f "capacitor.config.ts" ]; then
+            node -e '
+              const fs = require("fs");
+              let content = fs.readFileSync("capacitor.config.ts", "utf8");
+              content = content.replace(/webDir:\s*["\x27][^"\x27]+["\x27]/, "webDir: \"dist\"");
+              fs.writeFileSync("capacitor.config.ts", content);
+            '
+          else
+            cat << 'CAP_EOF' > capacitor.config.json
+          {
+            "appId": "com.meridian.app",
+            "appName": "Meridian",
+            "webDir": "dist"
+          }
+          CAP_EOF
+          fi
+
           npx cap add android || true
           npx cap sync android
 
-      - name: Build Android APK
+      - name: Configure Gradle and Build APK
         run: |
           if [ -f "android/app/build.gradle" ]; then
             cat << 'GRADLE_EOF' >> android/app/build.gradle
@@ -59,7 +123,8 @@ jobs:
           chmod +x gradlew
           ./gradlew assembleDebug
 
-      - uses: actions/upload-artifact@v4
+      - name: Upload APK Artifact
+        uses: actions/upload-artifact@v4
         with:
           name: app-debug-apk
           path: android/app/build/outputs/apk/debug/app-debug.apk
