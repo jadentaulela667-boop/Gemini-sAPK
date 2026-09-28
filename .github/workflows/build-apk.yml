@@ -25,42 +25,32 @@ jobs:
           npm install
           npm install @capacitor/core @capacitor/cli @capacitor/android
 
-      - name: Build Web Application & Bundle All Assets
+      - name: Build Web Application
         env:
           DATABASE_URL: "postgresql://postgres:postgres@localhost:5432/meridian"
           NODE_ENV: "production"
+          VITE_APP_MODE: "standalone"
         run: |
-          echo "=== 1. Compiling Meridian Vite frontend ==="
-          if [ -f "scripts/with-app-env.mjs" ]; then
-            node scripts/with-app-env.mjs vite build || npx vite build || true
-          else
-            npx vite build || true
-          fi
+          echo "=== 1. Compiling Frontend Assets ==="
+          npx vite build
 
-          echo "=== 2. Assembling complete dist directory ==="
+          echo "=== 2. Assembling Static Distribution Directory ==="
           mkdir -p dist
 
+          if [ -d ".vercel/output/static" ]; then
+            cp -r .vercel/output/static/* dist/
+          fi
+          if [ -d ".output/public" ]; then
+            cp -r .output/public/* dist/
+          fi
+          if [ -d "dist/client" ]; then
+            cp -r dist/client/* dist/
+          fi
           if [ -d "public" ]; then
-            echo "Including public assets..."
             cp -r public/* dist/ 2>/dev/null || true
           fi
 
-          if [ -d ".vercel/output/static" ]; then
-            echo "Including .vercel/output/static..."
-            cp -r .vercel/output/static/* dist/ 2>/dev/null || true
-          fi
-
-          if [ -d ".output/public" ]; then
-            echo "Including .output/public..."
-            cp -r .output/public/* dist/ 2>/dev/null || true
-          fi
-
-          if [ -d "dist/client" ]; then
-            echo "Including dist/client..."
-            cp -r dist/client/* dist/ 2>/dev/null || true
-          fi
-
-          echo "=== 3. Linking assets to index.html ==="
+          echo "=== 3. Fixing Asset Paths for Android WebView ==="
           node -e '
             const fs = require("fs");
             const path = require("path");
@@ -71,65 +61,76 @@ jobs:
             let htmlPath = path.join(distDir, "index.html");
             let htmlContent = "";
 
-            const possibleHtmlPaths = [
+            const candidatePaths = [
               path.join(distDir, "index.html"),
               path.join(process.cwd(), "index.html"),
               path.join(process.cwd(), "public", "index.html"),
               path.join(process.cwd(), "src", "index.html")
             ];
 
-            for (const p of possibleHtmlPaths) {
+            for (const p of candidatePaths) {
               if (fs.existsSync(p)) {
                 htmlContent = fs.readFileSync(p, "utf8");
                 break;
               }
             }
 
-            if (!htmlContent.trim()) {
-              htmlContent = `<!DOCTYPE html>
-            <html lang="en">
-            <head>
-              <meta charset="UTF-8">
-              <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-              <title>Meridian</title>
-            </head>
-            <body class="bg-black text-white">
-              <div id="root"></div>
-              <div id="app"></div>
-            </body>
-            </html>`;
-            }
-
+            let cssFiles = [];
+            let jsFiles = [];
             if (fs.existsSync(assetsDir)) {
               const files = fs.readdirSync(assetsDir);
-              const cssFiles = files.filter(f => f.endsWith(".css"));
-              const jsFiles = files.filter(f => f.endsWith(".js"));
-
-              cssFiles.forEach(css => {
-                if (!htmlContent.includes(css)) {
-                  htmlContent = htmlContent.replace("</head>", `  <link rel="stylesheet" href="./assets/${css}">\n</head>`);
-                }
-              });
-
-              jsFiles.forEach(js => {
-                if (!htmlContent.includes(js)) {
-                  htmlContent = htmlContent.replace("</body>", `  <script type="module" src="./assets/${js}"></script>\n</body>`);
-                }
-              });
+              cssFiles = files.filter(f => f.endsWith(".css"));
+              jsFiles = files.filter(f => f.endsWith(".js"));
             }
+
+            console.log("CSS Bundles:", cssFiles);
+            console.log("JS Bundles:", jsFiles);
+
+            if (!htmlContent.trim()) {
+              htmlContent = `<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Meridian - Market Analysis Desk</title>
+  <style>
+    body, html { margin: 0; padding: 0; background-color: #09090b; color: #ffffff; height: 100%; width: 100%; overflow: hidden; }
+    #root, #app { height: 100%; width: 100%; }
+  </style>
+</head>
+<body class="bg-black text-white">
+  <div id="root"></div>
+  <div id="app"></div>
+</body>
+</html>`;
+            }
+
+            cssFiles.forEach(css => {
+              if (!htmlContent.includes(css)) {
+                htmlContent = htmlContent.replace("</head>", `  <link rel="stylesheet" href="./assets/${css}">\n</head>`);
+              }
+            });
+
+            jsFiles.forEach(js => {
+              if (!htmlContent.includes(js)) {
+                htmlContent = htmlContent.replace("</body>", `  <script type="module" src="./assets/${js}"></script>\n</body>`);
+              }
+            });
 
             htmlContent = htmlContent.replace(/href="\/assets\//g, "href=\"./assets/");
             htmlContent = htmlContent.replace(/src="\/assets\//g, "src=\"./assets/");
             htmlContent = htmlContent.replace(/href="\/favicon/g, "href=\"./favicon");
 
             fs.writeFileSync(htmlPath, htmlContent, "utf8");
+            console.log("Prepared relative asset entry index.html successfully.");
           '
 
-          echo "=== 4. Final dist bundle verification ==="
-          du -sh dist/
-          find dist -maxdepth 3
+          ls -la dist/
+          if [ -d "dist/assets" ]; then
+            ls -la dist/assets/
+          fi
 
-      - name: Sync Capacitor
+      - name: Configure Capacitor Android
         run: |
           cat << 'CAP_EOF' > capacitor.config.json
           {
@@ -138,7 +139,8 @@ jobs:
             "webDir": "dist",
             "server": {
               "androidScheme": "https",
-              "cleartext": true
+              "cleartext": true,
+              "allowNavigation": ["*"]
             }
           }
           CAP_EOF
@@ -146,7 +148,7 @@ jobs:
           npx cap add android || true
           npx cap sync android
 
-      - name: Build Android APK
+      - name: Configure Gradle & Android Permissions
         run: |
           if [ -f "android/app/build.gradle" ]; then
             cat << 'GRADLE_EOF' >> android/app/build.gradle
@@ -161,6 +163,19 @@ jobs:
           }
           GRADLE_EOF
           fi
+
+          MANIFEST="android/app/src/main/AndroidManifest.xml"
+          if [ -f "$MANIFEST" ]; then
+            node -e '
+              const fs = require("fs");
+              let m = fs.readFileSync("'$MANIFEST'", "utf8");
+              if (!m.includes("usesCleartextTraffic")) {
+                m = m.replace("<application", "<application android:usesCleartextTraffic=\"true\"");
+                fs.writeFileSync("'$MANIFEST'", m);
+              }
+            '
+          fi
+
           cd android
           chmod +x gradlew
           ./gradlew assembleDebug
