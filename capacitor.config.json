@@ -1,0 +1,5 @@
+{
+      "appId": "com.grok.app",
+        "appName": "GrokApp",
+          "webDir": "dist"
+          }

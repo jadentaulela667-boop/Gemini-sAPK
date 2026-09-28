@@ -1,0 +1,23 @@
+node_modules/
+.project_id
+.github_repo
+.env
+.env.*
+.vercel/
+.tanstack/
+.output/
+dist/
+artifacts/
+screenshots/
+*.local
+
+# Grok sandbox internals (not part of the trading app)
+AGENTS.md
+AGENTS.project.md
+.grok/skills/
+.grok/references/
+.grok/status
+.grok/favicon-16.png
+.grok/favicon-32.png
+.grok/og-pending
+.node_modules.lock
