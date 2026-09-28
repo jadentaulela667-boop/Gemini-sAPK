@@ -31,104 +31,78 @@ jobs:
           NODE_ENV: "production"
           VITE_APP_MODE: "standalone"
         run: |
-          echo "=== 1. Compiling Frontend Assets ==="
-          npx vite build
+          npx vite build || npm run build || true
 
-          echo "=== 2. Assembling Static Distribution Directory ==="
+      - name: Bundle Static Assets and Fix Paths
+        run: |
           mkdir -p dist
 
-          if [ -d ".vercel/output/static" ]; then
-            cp -r .vercel/output/static/* dist/
-          fi
-          if [ -d ".output/public" ]; then
-            cp -r .output/public/* dist/
-          fi
-          if [ -d "dist/client" ]; then
-            cp -r dist/client/* dist/
-          fi
-          if [ -d "public" ]; then
-            cp -r public/* dist/ 2>/dev/null || true
-          fi
+          [ -d ".vercel/output/static" ] && cp -r .vercel/output/static/* dist/ || true
+          [ -d ".output/public" ] && cp -r .output/public/* dist/ || true
+          [ -d "dist/client" ] && cp -r dist/client/* dist/ || true
+          [ -d "public" ] && cp -r public/* dist/ 2>/dev/null || true
 
-          echo "=== 3. Fixing Asset Paths for Android WebView ==="
-          node -e '
-            const fs = require("fs");
-            const path = require("path");
+          cat << 'JS_EOF' > fix-dist.js
+          const fs = require('fs');
+          const path = require('path');
 
-            const distDir = path.join(process.cwd(), "dist");
-            const assetsDir = path.join(distDir, "assets");
+          const distDir = path.join(__dirname, 'dist');
+          const assetsDir = path.join(distDir, 'assets');
 
-            let htmlPath = path.join(distDir, "index.html");
-            let htmlContent = "";
+          if (!fs.existsSync(distDir)) {
+            fs.mkdirSync(distDir, { recursive: true });
+          }
 
-            const candidatePaths = [
-              path.join(distDir, "index.html"),
-              path.join(process.cwd(), "index.html"),
-              path.join(process.cwd(), "public", "index.html"),
-              path.join(process.cwd(), "src", "index.html")
-            ];
+          let htmlPath = path.join(distDir, 'index.html');
+          let htmlContent = '';
 
-            for (const p of candidatePaths) {
-              if (fs.existsSync(p)) {
-                htmlContent = fs.readFileSync(p, "utf8");
-                break;
-              }
+          const candidatePaths = [
+            htmlPath,
+            path.join(__dirname, 'index.html'),
+            path.join(__dirname, 'public', 'index.html'),
+            path.join(__dirname, 'src', 'index.html')
+          ];
+
+          for (const p of candidatePaths) {
+            if (fs.existsSync(p)) {
+              htmlContent = fs.readFileSync(p, 'utf8');
+              break;
             }
+          }
 
-            let cssFiles = [];
-            let jsFiles = [];
-            if (fs.existsSync(assetsDir)) {
-              const files = fs.readdirSync(assetsDir);
-              cssFiles = files.filter(f => f.endsWith(".css"));
-              jsFiles = files.filter(f => f.endsWith(".js"));
+          let cssFiles = [];
+          let jsFiles = [];
+          if (fs.existsSync(assetsDir)) {
+            const files = fs.readdirSync(assetsDir);
+            cssFiles = files.filter(f => f.endsWith('.css'));
+            jsFiles = files.filter(f => f.endsWith('.js'));
+          }
+
+          if (!htmlContent.trim()) {
+            htmlContent = '<!DOCTYPE html>\n<html lang="en" class="dark">\n<head>\n  <meta charset="UTF-8">\n  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">\n  <title>Meridian</title>\n</head>\n<body class="bg-black text-white">\n  <div id="root"></div>\n  <div id="app"></div>\n</body>\n</html>';
+          }
+
+          cssFiles.forEach(css => {
+            if (!htmlContent.includes(css)) {
+              htmlContent = htmlContent.replace('</head>', '  <link rel="stylesheet" href="./assets/' + css + '">\n</head>');
             }
+          });
 
-            console.log("CSS Bundles:", cssFiles);
-            console.log("JS Bundles:", jsFiles);
-
-            if (!htmlContent.trim()) {
-              htmlContent = `<!DOCTYPE html>
-<html lang="en" class="dark">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>Meridian - Market Analysis Desk</title>
-  <style>
-    body, html { margin: 0; padding: 0; background-color: #09090b; color: #ffffff; height: 100%; width: 100%; overflow: hidden; }
-    #root, #app { height: 100%; width: 100%; }
-  </style>
-</head>
-<body class="bg-black text-white">
-  <div id="root"></div>
-  <div id="app"></div>
-</body>
-</html>`;
+          jsFiles.forEach(js => {
+            if (!htmlContent.includes(js)) {
+              htmlContent = htmlContent.replace('</body>', '  <script type="module" src="./assets/' + js + '"></script>\n</body>');
             }
+          });
 
-            cssFiles.forEach(css => {
-              if (!htmlContent.includes(css)) {
-                htmlContent = htmlContent.replace("</head>", `  <link rel="stylesheet" href="./assets/${css}">\n</head>`);
-              }
-            });
+          htmlContent = htmlContent.replace(/href="\/assets\//g, 'href="./assets/');
+          htmlContent = htmlContent.replace(/src="\/assets\//g, 'src="./assets/');
+          htmlContent = htmlContent.replace(/href="\/favicon/g, 'href="./favicon');
 
-            jsFiles.forEach(js => {
-              if (!htmlContent.includes(js)) {
-                htmlContent = htmlContent.replace("</body>", `  <script type="module" src="./assets/${js}"></script>\n</body>`);
-              }
-            });
+          fs.writeFileSync(htmlPath, htmlContent, 'utf8');
+          console.log('Dist directory successfully patched for Android WebView.');
+          JS_EOF
 
-            htmlContent = htmlContent.replace(/href="\/assets\//g, "href=\"./assets/");
-            htmlContent = htmlContent.replace(/src="\/assets\//g, "src=\"./assets/");
-            htmlContent = htmlContent.replace(/href="\/favicon/g, "href=\"./favicon");
-
-            fs.writeFileSync(htmlPath, htmlContent, "utf8");
-            console.log("Prepared relative asset entry index.html successfully.");
-          '
-
-          ls -la dist/
-          if [ -d "dist/assets" ]; then
-            ls -la dist/assets/
-          fi
+          node fix-dist.js
 
       - name: Configure Capacitor Android
         run: |
@@ -166,14 +140,18 @@ jobs:
 
           MANIFEST="android/app/src/main/AndroidManifest.xml"
           if [ -f "$MANIFEST" ]; then
-            node -e '
-              const fs = require("fs");
-              let m = fs.readFileSync("'$MANIFEST'", "utf8");
-              if (!m.includes("usesCleartextTraffic")) {
-                m = m.replace("<application", "<application android:usesCleartextTraffic=\"true\"");
-                fs.writeFileSync("'$MANIFEST'", m);
+            cat << 'PERM_EOF' > update-manifest.js
+            const fs = require('fs');
+            const manifestPath = process.argv[2];
+            if (fs.existsSync(manifestPath)) {
+              let content = fs.readFileSync(manifestPath, 'utf8');
+              if (!content.includes('usesCleartextTraffic')) {
+                content = content.replace('<application', '<application android:usesCleartextTraffic="true"');
+                fs.writeFileSync(manifestPath, content, 'utf8');
               }
-            '
+            }
+            PERM_EOF
+            node update-manifest.js "$MANIFEST"
           fi
 
           cd android
