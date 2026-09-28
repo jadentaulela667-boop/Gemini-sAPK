@@ -42,7 +42,7 @@ jobs:
           [ -d "dist/client" ] && cp -r dist/client/* dist/ || true
           [ -d "public" ] && cp -r public/* dist/ 2>/dev/null || true
 
-          cat << 'JS_EOF' > fix-dist.js
+          cat << 'JS_EOF' > fix-dist.cjs
           const fs = require('fs');
           const path = require('path');
 
@@ -102,7 +102,7 @@ jobs:
           console.log('Dist directory successfully patched for Android WebView.');
           JS_EOF
 
-          node fix-dist.js
+          node fix-dist.cjs
 
       - name: Configure Capacitor Android
         run: |
@@ -140,7 +140,7 @@ jobs:
 
           MANIFEST="android/app/src/main/AndroidManifest.xml"
           if [ -f "$MANIFEST" ]; then
-            cat << 'PERM_EOF' > update-manifest.js
+            cat << 'PERM_EOF' > update-manifest.cjs
             const fs = require('fs');
             const manifestPath = process.argv[2];
             if (fs.existsSync(manifestPath)) {
@@ -151,7 +151,7 @@ jobs:
               }
             }
             PERM_EOF
-            node update-manifest.js "$MANIFEST"
+            node update-manifest.cjs "$MANIFEST"
           fi
 
           cd android
