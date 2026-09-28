@@ -25,23 +25,8 @@ jobs:
           npm install
           npm install @capacitor/core @capacitor/cli @capacitor/android
 
-      - name: Build Web Application
-        env:
-          DATABASE_URL: "postgresql://postgres:postgres@localhost:5432/meridian"
-          NODE_ENV: "production"
-          VITE_APP_MODE: "standalone"
+      - name: Create Helper Scripts
         run: |
-          npx vite build || npm run build || true
-
-      - name: Bundle Static Assets and Fix Paths
-        run: |
-          mkdir -p dist
-
-          [ -d ".vercel/output/static" ] && cp -r .vercel/output/static/* dist/ || true
-          [ -d ".output/public" ] && cp -r .output/public/* dist/ || true
-          [ -d "dist/client" ] && cp -r dist/client/* dist/ || true
-          [ -d "public" ] && cp -r public/* dist/ 2>/dev/null || true
-
           cat << 'JS_EOF' > fix-dist.cjs
           const fs = require('fs');
           const path = require('path');
@@ -99,9 +84,39 @@ jobs:
           htmlContent = htmlContent.replace(/href="\/favicon/g, 'href="./favicon');
 
           fs.writeFileSync(htmlPath, htmlContent, 'utf8');
-          console.log('Dist directory successfully patched for Android WebView.');
+          console.log('Dist directory patched successfully.');
           JS_EOF
 
+          cat << 'MANIFEST_EOF' > fix-manifest.cjs
+          const fs = require('fs');
+          const path = require('path');
+
+          const manifestPath = path.join(__dirname, 'android', 'app', 'src', 'main', 'AndroidManifest.xml');
+          if (fs.existsSync(manifestPath)) {
+            let content = fs.readFileSync(manifestPath, 'utf8');
+            if (!content.includes('usesCleartextTraffic')) {
+              content = content.replace('<application', '<application android:usesCleartextTraffic="true"');
+              fs.writeFileSync(manifestPath, content, 'utf8');
+              console.log('AndroidManifest patched for cleartext traffic.');
+            }
+          }
+          MANIFEST_EOF
+
+      - name: Build Web Application
+        env:
+          DATABASE_URL: "postgresql://postgres:postgres@localhost:5432/meridian"
+          NODE_ENV: "production"
+          VITE_APP_MODE: "standalone"
+        run: |
+          npx vite build || npm run build || true
+
+      - name: Bundle Static Assets and Fix Paths
+        run: |
+          mkdir -p dist
+          [ -d ".vercel/output/static" ] && cp -r .vercel/output/static/* dist/ || true
+          [ -d ".output/public" ] && cp -r .output/public/* dist/ || true
+          [ -d "dist/client" ] && cp -r dist/client/* dist/ || true
+          [ -d "public" ] && cp -r public/* dist/ 2>/dev/null || true
           node fix-dist.cjs
 
       - name: Configure Capacitor Android
@@ -125,34 +140,17 @@ jobs:
       - name: Configure Gradle & Android Permissions
         run: |
           if [ -f "android/app/build.gradle" ]; then
-            cat << 'GRADLE_EOF' >> android/app/build.gradle
-
-          configurations.all {
-              resolutionStrategy.eachDependency { details ->
-                  if (details.requested.group == 'org.jetbrains.kotlin' &&
-                     (details.requested.name == 'kotlin-stdlib-jdk7' || details.requested.name == 'kotlin-stdlib-jdk8')) {
-                      details.useTarget "org.jetbrains.kotlin:kotlin-stdlib:${details.requested.version}"
-                  }
-              }
-          }
-          GRADLE_EOF
+            echo '' >> android/app/build.gradle
+            echo 'configurations.all {' >> android/app/build.gradle
+            echo '    resolutionStrategy.eachDependency { details ->' >> android/app/build.gradle
+            echo '        if (details.requested.group == "org.jetbrains.kotlin" && (details.requested.name == "kotlin-stdlib-jdk7" || details.requested.name == "kotlin-stdlib-jdk8")) {' >> android/app/build.gradle
+            echo '            details.useTarget "org.jetbrains.kotlin:kotlin-stdlib:${details.requested.version}"' >> android/app/build.gradle
+            echo '        }' >> android/app/build.gradle
+            echo '    }' >> android/app/build.gradle
+            echo '}' >> android/app/build.gradle
           fi
 
-          MANIFEST="android/app/src/main/AndroidManifest.xml"
-          if [ -f "$MANIFEST" ]; then
-            cat << 'PERM_EOF' > update-manifest.cjs
-            const fs = require('fs');
-            const manifestPath = process.argv[2];
-            if (fs.existsSync(manifestPath)) {
-              let content = fs.readFileSync(manifestPath, 'utf8');
-              if (!content.includes('usesCleartextTraffic')) {
-                content = content.replace('<application', '<application android:usesCleartextTraffic="true"');
-                fs.writeFileSync(manifestPath, content, 'utf8');
-              }
-            }
-            PERM_EOF
-            node update-manifest.cjs "$MANIFEST"
-          fi
+          node fix-manifest.cjs
 
           cd android
           chmod +x gradlew
